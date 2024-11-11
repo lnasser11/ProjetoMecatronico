@@ -21,10 +21,18 @@ DigitalOut CLK_X(PC_7);
 DigitalOut D_X(PB_6);
 DigitalOut EN_X(PA_7);
 
+DigitalOut CLK_Z(PC_11);
+DigitalOut D_Z(PA_13);
+DigitalOut EN_Z(PA_14);
+
+
+
 DigitalIn FDC_MIN_Y(PB_4); 
 DigitalIn FDC_MAX_Y(PB_5);
 DigitalIn FDC_MIN_X(PA_10);
 DigitalIn FDC_MAX_X(PB_3);
+DigitalIn FDC_MAX_Z(PB_10);
+DigitalIn FDC_MIN_Z(PA_9);
 
 InterruptIn BotaoEmergencia(PC_10);
 
@@ -42,6 +50,7 @@ void flip(void);
 void iniciarMotores(void);
 void moverEixoY(int sentido);
 void moverEixoX(int sentido);
+void moverEixoZ(int sentido);
 void atualizarPosicoes(void);
 void referenciarMotores(void);
 void enviarPosicoes(void);
@@ -58,14 +67,17 @@ void emergencia(void);
 // Variáveis globais para controle de posição e estado
 int posicao_X = 0;
 int posicao_Y = 0;
+int posicao_Z = 0;
 int *posicoes_X = NULL;  // Ponteiros para arrays dinâmicos
 int *posicoes_Y = NULL;
+int *posicoes_Z = NULL;
 int num_posicoes_salvas = 0;
 int tamanho_array = 0;
 bool posicao_salva = false;  
 bool handshake_completo = false;
 int posicao_coleta_X = 0;
 int posicao_coleta_Y = 0;
+int posicao_coleta_Z = 0;
 bool posicao_coleta_salva = false;
 
 bool referenciamento_concluido = false;
@@ -73,6 +85,8 @@ bool emergencia_ativada = false;
 
 bool eixo_x_neutro = true; // Indica se o eixo X está em posição neutra
 bool eixo_y_neutro = true; // Indica se o eixo Y está em posição neutra
+bool eixo_z_neutro = true;
+
 char ch = ' ';
 
 // Função principal
@@ -110,27 +124,21 @@ int main() {
                 }
 
                 // Controle eixo X
-                if (ch == 'D' && !eixo_x_neutro) {
+                if (ch == 'D') {
                     moverEixoX(1);  
-                    eixo_x_neutro = false;
-                } else if (ch == 'E' && !eixo_x_neutro) {
+                } else if (ch == 'E') {
                     moverEixoX(0);  
-                    eixo_x_neutro = false;
                 } else if (ch == 'N') {
                     EN_X = 1;  
-                    eixo_x_neutro = true;
                 }
 
                 // Controle eixo Y
-                if (ch == 'C' && !eixo_y_neutro) {
+                if (ch == 'C') {
                     moverEixoY(1);  
-                    eixo_y_neutro = false;
-                } else if (ch == 'B' && !eixo_y_neutro) {
+                } else if (ch == 'B') {
                     moverEixoY(0);  
-                    eixo_y_neutro = false;
                 } else if (ch == 'M') {
                     EN_Y = 1;  
-                    eixo_y_neutro = true;
                 }
         }
     }
@@ -150,29 +158,40 @@ int main() {
                 ch = bt.getc();  // Lê o caractere recebido via Bluetooth
 
                 // Controle eixo X
-                if (ch == 'D' && !eixo_x_neutro) {
+                if (ch == 'D') {  // Comando para mover à direita
                     moverEixoX(1);  
                     eixo_x_neutro = false;
-                } else if (ch == 'E' && !eixo_x_neutro) {
+                } else if (ch == 'E') {  // Comando para mover à esquerda
                     moverEixoX(0);  
                     eixo_x_neutro = false;
-                } else if (ch == 'N') {
+                } else if (ch == 'N' && !eixo_x_neutro) {  // Comando de parada para o eixo X
                     EN_X = 1;  
                     eixo_x_neutro = true;
                 }
 
-                // Controle eixo Y
-                if (ch == 'C' && !eixo_y_neutro) {
+                // Controle do eixo Y
+                if (ch == 'C') {  // Comando para mover para cima
                     moverEixoY(1);  
                     eixo_y_neutro = false;
-                } else if (ch == 'B' && !eixo_y_neutro) {
+                } else if (ch == 'B') {  // Comando para mover para baixo
                     moverEixoY(0);  
                     eixo_y_neutro = false;
-                } else if (ch == 'M') {
+                } else if (ch == 'M' && !eixo_y_neutro) {  // Comando de parada para o eixo Y
                     EN_Y = 1;  
                     eixo_y_neutro = true;
                 }
 
+                // Controle do eixo Z (se aplicável)
+                if (ch == 'U') {  // Comando para mover Z para cima
+                    moverEixoZ(1);  
+                    eixo_z_neutro = false;
+                } else if (ch == 'D') {  // Comando para mover Z para baixo
+                    moverEixoZ(0);  
+                    eixo_z_neutro = false;
+                } else if (ch == 'K' && !eixo_z_neutro) {  // Comando de parada para o eixo Z
+                    EN_Z = 1;  
+                    eixo_z_neutro = true;
+                }
                 // Comandos adicionais
                 if (referenciamento_concluido) {
                     if (ch == 'S') {
@@ -191,6 +210,7 @@ int main() {
 void iniciarMotores() {
     EN_X = 1;
     EN_Y = 1;
+    EN_Z = 1;
 }
 
 // Funções de controle dos eixos
@@ -218,6 +238,17 @@ void moverEixoX(int sentido) {
     }
 }
 
+void moverEixoZ(int sentido) {  // Função adicional para o eixo Z
+    if (sentido == 1 && FDC_MAX_Z != 0) {
+        D_Z = sentido;
+        EN_Z = 0;
+    } else if (sentido == 0 && FDC_MIN_Z != 0) {
+        D_Z = sentido;
+        EN_Z = 0;
+    } else {
+        EN_Z = 1;  // Para o movimento se o limite for atingido
+    }
+}
 // Funções auxiliares para controle de posição
 void flip(void) {
     atualizarPosicoes();
@@ -239,6 +270,7 @@ void referenciarMotores() {
     int estado = 0;
     int EST_Y = 0;
     int EST_X = 0;
+    int EST_Z = 0;
     int animacao_pontos = 0;
 
     lcd.cls();
@@ -258,17 +290,17 @@ void referenciarMotores() {
         switch (estado) {
             case 0:
                 if (EST_Y == 0) {
-                    moverEixoY(1);
-                    if (FDC_MAX_Y == 0) EST_Y = 1;
-                } else if (EST_Y == 1) {
+                    moverEixoZ(1);
+                    if (FDC_MAX_Z == 0) EST_Z = 1;
+                } else if (EST_Z == 1) {
                     toggle.attach(&flip, 0.0045); 
-                    moverEixoY(0);
+                    moverEixoZ(0);
                     wait_ms(800);
-                    EST_Y = 2;
+                    EST_Z = 2;
                 } else {
                     toggle.attach(&flip, 0.0015); 
-                    EN_Y = 1;
-                    posicao_Y = 0;
+                    EN_Z = 1;
+                    posicao_Z = 0;
                     estado = 1;
                 }
                 break;
@@ -285,6 +317,22 @@ void referenciarMotores() {
                     toggle.attach(&flip, 0.0015); 
                     EN_X = 1;
                     posicao_X = 0;
+                    estado = 2;
+                }
+                break;
+            case 2:
+                if (EST_Y == 0) {
+                    moverEixoY(1);
+                    if (FDC_MAX_Y == 0) EST_Y = 1;
+                } else if (EST_Y == 1) {
+                    toggle.attach(&flip, 0.0045); 
+                    moverEixoY(0);
+                    wait_ms(800);
+                    EST_Y = 2;
+                } else {
+                    toggle.attach(&flip, 0.0015); 
+                    EN_Y = 1;
+                    posicao_Y = 0;
                     estado = 3;
                 }
                 break;
@@ -324,6 +372,7 @@ void salvarPosicaoAtual() {
         // Salva a posição atual
         posicoes_X[num_posicoes_salvas] = posicao_X;
         posicoes_Y[num_posicoes_salvas] = posicao_Y;
+        posicoes_Z[num_posicoes_salvas] = posicao_Z;
 
         // Confirmação rápida de posição salva nas linhas 3 e 4
         lcd.locate(0, 0); // Linha 3
