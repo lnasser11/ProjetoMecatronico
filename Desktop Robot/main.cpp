@@ -3,6 +3,7 @@
 
 // Definindo as variáveis e ponteiros para arrays dinâmicos
 Serial bt(PA_11, PA_12);
+Serial pc(USBTX, USBRX);
 DigitalIn Button(PC_13);
 
 I2C i2c_lcd(I2C_SDA, I2C_SCL);  // Configura pinos I2C
@@ -69,6 +70,11 @@ bool posicao_coleta_salva = false;
 
 bool referenciamento_concluido = false;
 bool emergencia_ativada = false;
+
+bool eixo_x_neutro = true; // Indica se o eixo X está em posição neutra
+bool eixo_y_neutro = true; // Indica se o eixo Y está em posição neutra
+char ch = ' ';
+
 // Função principal
 int main() {
     lcd.setBacklight(TextLCD::LightOn);
@@ -85,13 +91,51 @@ int main() {
         bt.baud(9600); // Configuração da frequência de funcionamento
 
         while (!handshake_completo) {
+            
             realizarHandshake();
         }
 
+        if (handshake_completo) {
+            lcd.cls();
+            lcd.locate(0,0);
+            lcd.printf("Iniciar essa PORRA");
+            lcd.locate(0,1);
+            lcd.printf("de referenciamento?");
         while (!referenciamento_concluido) {
-            referenciarMotores();
-        }
 
+            if (bt.readable()) {
+                ch = bt.getc();
+                if (ch == 'S') {  // Sai do loop ao receber "S" pelo Bluetooth
+                    referenciarMotores();
+                }
+
+                // Controle eixo X
+                if (ch == 'D' && !eixo_x_neutro) {
+                    moverEixoX(1);  
+                    eixo_x_neutro = false;
+                } else if (ch == 'E' && !eixo_x_neutro) {
+                    moverEixoX(0);  
+                    eixo_x_neutro = false;
+                } else if (ch == 'N') {
+                    EN_X = 1;  
+                    eixo_x_neutro = true;
+                }
+
+                // Controle eixo Y
+                if (ch == 'C' && !eixo_y_neutro) {
+                    moverEixoY(1);  
+                    eixo_y_neutro = false;
+                } else if (ch == 'B' && !eixo_y_neutro) {
+                    moverEixoY(0);  
+                    eixo_y_neutro = false;
+                } else if (ch == 'M') {
+                    EN_Y = 1;  
+                    eixo_y_neutro = true;
+                }
+        }
+    }
+
+        }
         // Loop principal do processo de pipetagem
         while (true) {
             if (tamanho_array == 0) {
@@ -103,28 +147,46 @@ int main() {
             }
             
             if (bt.readable()) {
-                char ch = bt.getc();  // Lê o caractere recebido via Bluetooth
+                ch = bt.getc();  // Lê o caractere recebido via Bluetooth
 
-                if (ch == 'D') moverEixoX(1);  
-                else if (ch == 'E') moverEixoX(0);  
-                else if (ch == 'N') EN_X = 1;  
-
-                if (ch == 'C') moverEixoY(1);  
-                else if (ch == 'B') moverEixoY(0);  
-                else if (ch == 'M') EN_Y = 1;  
-            
-                if (ch == 'S') {
-                    wait_ms(100);
-                    if (!posicao_coleta_salva) salvarPosicaoColeta();
-                    else salvarPosicaoAtual();
+                // Controle eixo X
+                if (ch == 'D' && !eixo_x_neutro) {
+                    moverEixoX(1);  
+                    eixo_x_neutro = false;
+                } else if (ch == 'E' && !eixo_x_neutro) {
+                    moverEixoX(0);  
+                    eixo_x_neutro = false;
+                } else if (ch == 'N') {
+                    EN_X = 1;  
+                    eixo_x_neutro = true;
                 }
-                if (ch == 'G') moverParaPosicoes();
-            }
 
-            if (!referenciamento_concluido) break;
+                // Controle eixo Y
+                if (ch == 'C' && !eixo_y_neutro) {
+                    moverEixoY(1);  
+                    eixo_y_neutro = false;
+                } else if (ch == 'B' && !eixo_y_neutro) {
+                    moverEixoY(0);  
+                    eixo_y_neutro = false;
+                } else if (ch == 'M') {
+                    EN_Y = 1;  
+                    eixo_y_neutro = true;
+                }
+
+                // Comandos adicionais
+                if (referenciamento_concluido) {
+                    if (ch == 'S') {
+                        wait_ms(100);
+                        if (!posicao_coleta_salva) salvarPosicaoColeta();
+                        else salvarPosicaoAtual();
+                    }
+                    if (ch == 'G') moverParaPosicoes();
+                }
+            }
         }
     }
 }
+
 // Funções de controle do sistema
 void iniciarMotores() {
     EN_X = 1;
@@ -170,98 +232,74 @@ void atualizarPosicoes() {
 }
 
 void referenciarMotores() {
-    
-        if (!referenciamento_concluido) {
-            lcd.cls();
-            lcd.printf("Iniciar referenc.?");
-            lcd.locate(0, 1);
-            lcd.printf("Envie comando 'R'");
-            
-            // Aguarda o comando "R" para iniciar o referenciamento
-            while (true) {
-                if (bt.readable()) {
-                    char ch = bt.getc();
-                    if (ch == 'R') {  // Sai do loop ao receber "R" pelo Bluetooth
-                        break;
-                    }
-                    // Permite movimento dos motores durante a espera
-                    if (ch == 'D') moverEixoX(1);  
-                    else if (ch == 'E') moverEixoX(0);  
-                    else if (ch == 'N') EN_X = 1;  
+    lcd.cls();
+    lcd.printf("Aguardando 'S' p/ Referenc.");
 
-                    if (ch == 'C') moverEixoY(1);  
-                    else if (ch == 'B') moverEixoY(0);  
-                    else if (ch == 'M') EN_Y = 1;
+    // Inicia o processo de referenciamento após receber "S"
+    int estado = 0;
+    int EST_Y = 0;
+    int EST_X = 0;
+    int animacao_pontos = 0;
+
+    lcd.cls();
+    lcd.printf("Referenciando");
+
+    while (estado != 3) {
+        lcd.locate(14, 0);
+        switch (animacao_pontos % 4) {
+            case 0: lcd.printf("   "); break;
+            case 1: lcd.printf(".  "); break;
+            case 2: lcd.printf(".. "); break;
+            case 3: lcd.printf("..."); break;
+        }
+        animacao_pontos++;
+        wait_ms(300);
+
+        switch (estado) {
+            case 0:
+                if (EST_Y == 0) {
+                    moverEixoY(1);
+                    if (FDC_MAX_Y == 0) EST_Y = 1;
+                } else if (EST_Y == 1) {
+                    toggle.attach(&flip, 0.0045); 
+                    moverEixoY(0);
+                    wait_ms(800);
+                    EST_Y = 2;
+                } else {
+                    toggle.attach(&flip, 0.0015); 
+                    EN_Y = 1;
+                    posicao_Y = 0;
+                    estado = 1;
                 }
-            }
+                break;
+            case 1:
+                if (EST_X == 0) {
+                    moverEixoX(1);
+                    if (FDC_MAX_X == 0) EST_X = 1;
+                } else if (EST_X == 1) {
+                    toggle.attach(&flip, 0.0045); 
+                    moverEixoX(0);
+                    wait_ms(1000);
+                    EST_X = 2;
+                } else {
+                    toggle.attach(&flip, 0.0015); 
+                    EN_X = 1;
+                    posicao_X = 0;
+                    estado = 3;
+                }
+                break;
         }
-
-        // Inicia o processo de referenciamento após receber "R"
-        int estado = 0;
-        int EST_Y = 0;
-        int EST_X = 0;
-        int animacao_pontos = 0;
-
-        lcd.cls();
-        lcd.printf("Referenciando");
-
-        while (estado != 3) {
-
-            lcd.locate(14, 0);
-            switch (animacao_pontos % 4) {
-                case 0: lcd.printf("   "); break;
-                case 1: lcd.printf(".  "); break;
-                case 2: lcd.printf(".. "); break;
-                case 3: lcd.printf("..."); break;
-            }
-            animacao_pontos++;
-            wait_ms(300);
-
-            switch (estado) {
-                case 0:
-                    if (EST_Y == 0) {
-                        moverEixoY(1);
-                        if (FDC_MAX_Y == 0) EST_Y = 1;
-                    } else if (EST_Y == 1) {
-                        toggle.attach(&flip, 0.0045); 
-                        moverEixoY(0);
-                        wait_ms(800);
-                        EST_Y = 2;
-                    } else {
-                        toggle.attach(&flip, 0.0015); 
-                        EN_Y = 1;
-                        posicao_Y = 0;
-                        estado = 1;
-                    }
-                    break;
-                case 1:
-                    if (EST_X == 0) {
-                        moverEixoX(1);
-                        if (FDC_MAX_X == 0) EST_X = 1;
-                    } else if (EST_X == 1) {
-                        toggle.attach(&flip, 0.0045); 
-                        moverEixoX(0);
-                        wait_ms(1000);
-                        EST_X = 2;
-                    } else {
-                        toggle.attach(&flip, 0.0015); 
-                        EN_X = 1;
-                        posicao_X = 0;
-                        estado = 3;
-                    }
-                    break;
-            }
-        }
-
-        lcd.cls();
-        lcd.locate(0, 0);
-        lcd.printf("Referenciamento");
-        lcd.locate(0, 1);
-        lcd.printf("completo!");
-        wait_ms(2000);
-
-        referenciamento_concluido = true;  // Marca como concluído para não repetir
     }
+
+    lcd.cls();
+    lcd.locate(0, 0);
+    lcd.printf("Referenciamento");
+    lcd.locate(0, 1);
+    lcd.printf("completo!");
+    referenciamento_concluido = true;
+    wait_ms(2000);
+}
+
 // Funções de salvamento e resgate de posições
 void salvarPosicaoColeta() {
     posicao_coleta_X = posicao_X;
@@ -402,7 +440,6 @@ void moverParaPosicoes() {
 
 // Funções auxiliares de controle e interface
 void realizarHandshake() {
-    char ch;
     lcd.cls();
     lcd.printf("Iniciando BT...");
 
