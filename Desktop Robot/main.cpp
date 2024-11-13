@@ -6,44 +6,50 @@ Serial bt(PA_11, PA_12);
 Serial pc(USBTX, USBRX);
 DigitalIn Button(PC_13);
 
-I2C i2c_lcd(I2C_SDA, I2C_SCL);  // Configura pinos I2C
+I2C i2c_lcd(I2C_SDA, I2C_SCL); // Configuração pinos I2C para o display
 TextLCD_I2C lcd(&i2c_lcd, 0x7E, TextLCD::LCD20x4); // Endereço 0x7E e display 20x4
 
 Ticker toggle;
 Ticker posicaoTicker;
 
 // Definição dos pinos dos motores e dos sensores de fim de curso
-DigitalOut CLK_Y(PA_6); 
-DigitalOut D_Y(PA_5); 
+DigitalOut CLK_Y(PB_4); 
+DigitalOut D_Y(PB_10); 
 DigitalOut EN_Y(PA_8); 
 
-DigitalOut CLK_X(PC_7); 
-DigitalOut D_X(PB_6);
-DigitalOut EN_X(PA_7);
+DigitalOut CLK_X(PA_10); 
+DigitalOut D_X(PB_3);
+DigitalOut EN_X(PB_5);
 
-DigitalOut CLK_Z(PC_11);
-DigitalOut D_Z(PA_13);
-DigitalOut EN_Z(PA_14);
+DigitalOut CLK_Z(PA_9);
+DigitalOut D_Z(PC_7);
+DigitalOut EN_Z(PB_6);
 
+// Definindo os sensores de fim de curso
+DigitalIn FDC_MAX_Y(PB_1); // Ajustado: Fim de curso máximo para Y
+DigitalIn FDC_MIN_Y(PB_15); // Ajustado: Fim de curso mínimo para Y
 
+DigitalIn FDC_MAX_X(PB_12); // Ajustado: Fim de curso máximo para X
+DigitalIn FDC_MIN_X(PB_2);  // Ajustado: Fim de curso mínimo para X
 
-DigitalIn FDC_MIN_Y(PB_4); 
-DigitalIn FDC_MAX_Y(PB_5);
-DigitalIn FDC_MIN_X(PA_10);
-DigitalIn FDC_MAX_X(PB_3);
-DigitalIn FDC_MAX_Z(PB_10);
-DigitalIn FDC_MIN_Z(PA_9);
+DigitalIn FDC_MAX_Z(PB_14);
+DigitalIn FDC_MIN_Z(PB_13);
 
 InterruptIn BotaoEmergencia(PC_10);
 
 // Definição dos pinos do teclado matricial
-DigitalOut col1(PB_15);
-DigitalOut col2(PB_14);
-DigitalOut col3(PB_13);
-DigitalIn row1(PC_5, PullUp);
-DigitalIn row2(PC_8, PullUp);
-DigitalIn row3(PB_2, PullUp);
-DigitalIn row4(PB_1, PullUp);
+DigitalOut col1(PC_9);
+DigitalOut col2(PA_6);
+DigitalOut col3(PA_5);
+DigitalIn row1(PC_4, PullUp);
+DigitalIn row2(PC_5, PullUp);
+DigitalIn row3(PC_6, PullUp);
+DigitalIn row4(PC_8, PullUp);
+
+
+Timer timerX, timerY, timerZ;  // Temporizadores para cada eixo
+int timeout_ms = 200;  
+
 
 // Declaração das funções
 void flip(void);
@@ -51,7 +57,9 @@ void iniciarMotores(void);
 void moverEixoY(int sentido);
 void moverEixoX(int sentido);
 void moverEixoZ(int sentido);
-void atualizarPosicoes(void);
+void pararEixoZ(void);
+void pararEixoY(void);
+void pararEixoX(void);
 void referenciarMotores(void);
 void enviarPosicoes(void);
 void moverParaPosicoes(void);
@@ -89,6 +97,9 @@ bool eixo_z_neutro = true;
 
 char ch = ' ';
 
+int contador_posicoes_salvas = 0;  // Contador de posições salvas
+bool posicoes_completas = false;   // Sinalizador para indicar se todas as posições foram salvas
+
 // Função principal
 int main() {
     lcd.setBacklight(TextLCD::LightOn);
@@ -97,6 +108,11 @@ int main() {
     // Configura interrupção para o botão de emergência com debounce
     emergencia();
     BotaoEmergencia.fall(&reiniciarPrograma);
+
+    timerX.start();
+    timerY.start();
+    timerZ.start();
+
     while (true) {
 
         iniciarMotores();
@@ -111,98 +127,172 @@ int main() {
 
         if (handshake_completo) {
             lcd.cls();
-            lcd.locate(0,0);
-            lcd.printf("Iniciar essa PORRA");
-            lcd.locate(0,1);
-            lcd.printf("de referenciamento?");
-        while (!referenciamento_concluido) {
+            lcd.locate(0, 0);
+            lcd.printf("Iniciar Referenciamento");
 
-            if (bt.readable()) {
-                ch = bt.getc();
-                if (ch == 'S') {  // Sai do loop ao receber "S" pelo Bluetooth
-                    referenciarMotores();
-                }
+            // Loop principal de operação dos motores
+            while (!referenciamento_concluido) {
+                if (bt.readable()) {
+                    ch = bt.getc();
 
-                // Controle eixo X
-                if (ch == 'D') {
-                    moverEixoX(1);  
-                } else if (ch == 'E') {
-                    moverEixoX(0);  
-                } else if (ch == 'N') {
-                    EN_X = 1;  
-                }
+                    // Utilizando switch case para controlar os motores e referenciamento
+                    switch (ch) {
+                        // Comando para iniciar o referenciamento
+                        case 'S':
+                            referenciarMotores();
+                            ch = ' ';
+                            break;
 
-                // Controle eixo Y
-                if (ch == 'C') {
-                    moverEixoY(1);  
-                } else if (ch == 'B') {
-                    moverEixoY(0);  
-                } else if (ch == 'M') {
-                    EN_Y = 1;  
-                }
+                        // Controle do motor X
+                        case 'D':            // Comando para mover X à direita
+                            moverEixoX(1);
+                            ch = ' ';
+                            break;
+                        case 'E':            // Comando para mover X à esquerda
+                            moverEixoX(0);
+                            ch = ' ';
+                            break;
+                        case 'N':            // Comando para parar o motor X
+                            pararEixoX();
+                            ch = ' ';
+                            break;
+
+                        // Controle do motor Y
+                        case 'C':            // Comando para mover Y para cima
+                            moverEixoY(1);
+                            ch = ' ';
+                            break;
+                        case 'B':            // Comando para mover Y para baixo
+                            moverEixoY(0);
+                            ch = ' ';
+                            break;
+                        case 'M':            // Comando para parar o motor Y
+                            pararEixoY();
+                            ch = ' ';
+                            break;
+
+                        // Controle do motor Z
+                        case 'U':            // Comando para mover Z para cima
+                            moverEixoZ(1);
+                            ch = ' ';
+                            break;
+                        case 'Z':            // Comando para mover Z para baixo
+                            moverEixoZ(0);
+                            ch = ' ';
+                            break;
+                        case 'K':            // Comando para parar o motor Z
+                            pararEixoZ();
+                            ch = ' ';
+                            break;
+
+                        // Comando desconhecido (opcional)
+                        default:
+                            // Caso deseje tratar comandos desconhecidos
+                            break;
+            }
         }
     }
-
-        }
-        // Loop principal do processo de pipetagem
-        while (true) {
-            if (tamanho_array == 0) {
-                qtdPosicoes();
-                if (tamanho_array > 0) {
-                    posicoes_X = new int[tamanho_array]();  // Aloca o array de posições dinamicamente
-                    posicoes_Y = new int[tamanho_array]();
-                }
+}
+    while (true) {
+        
+        if (tamanho_array == 0) {
+            qtdPosicoes();
+            if (tamanho_array > 0) {
+                posicoes_X = new int[tamanho_array]();  // Aloca o array de posições dinamicamente
+                posicoes_Y = new int[tamanho_array]();
+                posicoes_Z = new int[tamanho_array]();
             }
-            
-            if (bt.readable()) {
-                ch = bt.getc();  // Lê o caractere recebido via Bluetooth
+        }
 
-                // Controle eixo X
-                if (ch == 'D') {  // Comando para mover à direita
-                    moverEixoX(1);  
-                    eixo_x_neutro = false;
-                } else if (ch == 'E') {  // Comando para mover à esquerda
-                    moverEixoX(0);  
-                    eixo_x_neutro = false;
-                } else if (ch == 'N' && !eixo_x_neutro) {  // Comando de parada para o eixo X
-                    EN_X = 1;  
-                    eixo_x_neutro = true;
-                }
+        if (referenciamento_concluido) {
+            if (bt.readable()) ch = bt.getc();
+            switch (ch) {
+                // Comando para iniciar o referenciamento
+                case 'S':
+                    wait_ms(100);
+                    if (!posicao_coleta_salva) {
+                        salvarPosicaoColeta();
+                        posicao_coleta_salva = true;
+                        ch = ' ';
+                    } else if (!posicoes_completas) {
+                        salvarPosicaoAtual();
+                        contador_posicoes_salvas++;  // Incrementa o contador
 
-                // Controle do eixo Y
-                if (ch == 'C') {  // Comando para mover para cima
-                    moverEixoY(1);  
-                    eixo_y_neutro = false;
-                } else if (ch == 'B') {  // Comando para mover para baixo
-                    moverEixoY(0);  
-                    eixo_y_neutro = false;
-                } else if (ch == 'M' && !eixo_y_neutro) {  // Comando de parada para o eixo Y
-                    EN_Y = 1;  
-                    eixo_y_neutro = true;
-                }
-
-                // Controle do eixo Z (se aplicável)
-                if (ch == 'U') {  // Comando para mover Z para cima
-                    moverEixoZ(1);  
-                    eixo_z_neutro = false;
-                } else if (ch == 'D') {  // Comando para mover Z para baixo
-                    moverEixoZ(0);  
-                    eixo_z_neutro = false;
-                } else if (ch == 'K' && !eixo_z_neutro) {  // Comando de parada para o eixo Z
-                    EN_Z = 1;  
-                    eixo_z_neutro = true;
-                }
-                // Comandos adicionais
-                if (referenciamento_concluido) {
-                    if (ch == 'S') {
-                        wait_ms(100);
-                        if (!posicao_coleta_salva) salvarPosicaoColeta();
-                        else salvarPosicaoAtual();
+                        // Verifica se todas as posições foram salvas
+                        if (contador_posicoes_salvas >= tamanho_array) {
+                            posicoes_completas = true;  // Ativa o sinalizador quando todas as posições são salvas
+                        }
+                        ch = ' ';
+                    } else {
+                        // Todas as posições foram salvas; agora o comando 'S' move para as posições
+                        moverParaPosicoes();
+                        ch = ' ';
                     }
-                    if (ch == 'G') moverParaPosicoes();
-                }
+                    break;
+
+                // Controle do motor X
+                case 'D':            // Comando para mover X à direita
+                    moverEixoX(1);
+                    ch = ' ';
+                    break;
+                case 'E':            // Comando para mover X à esquerda
+                    moverEixoX(0);
+                    ch = ' ';
+                    break;
+                case 'N':            // Comando para parar o motor X
+                    pararEixoX();
+                    ch = ' ';
+                    break;
+
+                // Controle do motor Y
+                case 'C':            // Comando para mover Y para cima
+                    moverEixoY(1);
+                    ch = ' ';
+                    break;
+                case 'B':            // Comando para mover Y para baixo
+                    moverEixoY(0);
+                    ch = ' ';
+                    break;
+                case 'M':            // Comando para parar o motor Y
+                    pararEixoY();
+                    ch = ' ';
+                    break;
+
+                // Controle do motor Z
+                case 'U':            // Comando para mover Z para cima
+                    moverEixoZ(1);
+                    ch = ' ';
+                    break;
+                case 'Z':            // Comando para mover Z para baixo
+                    moverEixoZ(0);
+                    ch = ' ';
+                    break;
+                case 'K':            // Comando para parar o motor Z
+                    pararEixoZ();
+                    ch = ' ';
+                    break;
+
+                case 'G':
+                    if (num_posicoes_salvas > 0) {
+                        num_posicoes_salvas--;  // Decrementa o contador para "remover" a última posição
+                        posicoes_completas = false;  // Define como incompleto para permitir novo salvamento
+                        lcd.cls();
+                        lcd.printf("Posicao %d removida", num_posicoes_salvas + 1);
+                        wait_ms(1000);
+                    } else {
+                        lcd.cls();
+                        lcd.printf("Nenhuma posicao para remover");
+                        wait_ms(1000);
+                    }
+                    ch = ' ';
+                    break;
+
+                default:
+                    // Caso deseje tratar comandos desconhecidos
+                    break;
             }
         }
+    }
     }
 }
 
@@ -213,53 +303,49 @@ void iniciarMotores() {
     EN_Z = 1;
 }
 
-// Funções de controle dos eixos
-void moverEixoY(int sentido) {
-    if (sentido == 1 && FDC_MAX_Y != 0) {
-        D_Y = sentido;
-        EN_Y = 0;
-    } else if (sentido == 0 && FDC_MIN_Y != 0) {
-        D_Y = sentido;
-        EN_Y = 0;
-    } else {
-        EN_Y = 1;
-    }
-}
-
 void moverEixoX(int sentido) {
-    if (sentido == 1 && FDC_MAX_X != 0) {
-        D_X = sentido;
-        EN_X = 0;
-    } else if (sentido == 0 && FDC_MIN_X != 0) {
-        D_X = sentido;
-        EN_X = 0;
-    } else {
-        EN_X = 1;
-    }
+    D_X = sentido;
+    EN_X = 0;
 }
 
-void moverEixoZ(int sentido) {  // Função adicional para o eixo Z
-    if (sentido == 1 && FDC_MAX_Z != 0) {
-        D_Z = sentido;
-        EN_Z = 0;
-    } else if (sentido == 0 && FDC_MIN_Z != 0) {
-        D_Z = sentido;
-        EN_Z = 0;
-    } else {
-        EN_Z = 1;  // Para o movimento se o limite for atingido
-    }
+void moverEixoY(int sentido) {
+    D_Y = sentido;
+    EN_Y = 0;
+}
+
+void moverEixoZ(int sentido) {
+    D_Z = sentido;
+    EN_Z = 0;
 }
 // Funções auxiliares para controle de posição
+
 void flip(void) {
-    atualizarPosicoes();
-}
+    // Verifica o eixo X
+    if (D_X == 1 && FDC_MAX_X != 0) {      // Movendo para a direita e sem atingir o fim de curso máximo de X
+        CLK_X = !CLK_X;
+        if (EN_X == 0) posicao_X += 1;     // Incrementa posição se motor estiver ativo
+    } else if (D_X == 0 && FDC_MIN_X != 0) { // Movendo para a esquerda e sem atingir o fim de curso mínimo de X
+        CLK_X = !CLK_X;
+        if (EN_X == 0) posicao_X -= 1;     // Decrementa posição se motor estiver ativo
+    }
 
-void atualizarPosicoes() {
-    CLK_X = !CLK_X;
-    CLK_Y = !CLK_Y;
+    // Verifica o eixo Y
+    if (D_Y == 1 && FDC_MAX_Y != 0) {      // Movendo para cima e sem atingir o fim de curso máximo de Y
+        CLK_Y = !CLK_Y;
+        if (EN_Y == 0) posicao_Y -= 1;     // Decrementa posição se motor estiver ativo
+    } else if (D_Y == 0 && FDC_MIN_Y != 0) { // Movendo para baixo e sem atingir o fim de curso mínimo de Y
+        CLK_Y = !CLK_Y;
+        if (EN_Y == 0) posicao_Y += 1;     // Incrementa posição se motor estiver ativo
+    }
 
-    if (EN_X == 0) posicao_X += (D_X == 1) ? 1 : -1;
-    if (EN_Y == 0) posicao_Y += (D_Y == 1) ? -1 : 1;
+    // Verifica o eixo Z
+    if (D_Z == 1 && FDC_MAX_Z != 0) {      // Movendo para cima e sem atingir o fim de curso máximo de Z
+        CLK_Z = !CLK_Z;
+        if (EN_Z == 0) posicao_Z -= 1;     // Decrementa posição se motor estiver ativo
+    } else if (D_Z == 0 && FDC_MIN_Z != 0) { // Movendo para baixo e sem atingir o fim de curso mínimo de Z
+        CLK_Z = !CLK_Z;
+        if (EN_Z == 0) posicao_Z += 1;     // Incrementa posição se motor estiver ativo
+    }
 }
 
 void referenciarMotores() {
@@ -289,51 +375,56 @@ void referenciarMotores() {
 
         switch (estado) {
             case 0:
-                if (EST_Y == 0) {
-                    moverEixoZ(1);
-                    if (FDC_MAX_Z == 0) EST_Z = 1;
+                if (EST_Z == 0) {  // Referenciando o eixo Z até o fim de curso mínimo
+                    moverEixoZ(0);     // Define direção para descer
+                    if (FDC_MIN_Z == 0) { // Fim de curso mínimo de Z atingido
+                        EST_Z = 1; // Passa para o ajuste fino
+                    }
                 } else if (EST_Z == 1) {
-                    toggle.attach(&flip, 0.0045); 
-                    moverEixoZ(0);
-                    wait_ms(800);
-                    EST_Z = 2;
-                } else {
-                    toggle.attach(&flip, 0.0015); 
-                    EN_Z = 1;
-                    posicao_Z = 0;
-                    estado = 1;
+                    // Ajuste fino para Z em baixa velocidade
+                    toggle.attach(&flip, 0.0045); // Reduz a velocidade do clock
+                    moverEixoZ(1);                // Move lentamente para cima
+                    wait_ms(1000);                 // Aguarda um curto período
+                    toggle.attach(&flip, 0.0015); // Restaura a velocidade normal
+                    EN_Z = 1;                     // Desativa o motor Z
+                    posicao_Z = 0;                // Marca a posição como zero
+                    estado = 1;                   // Passa para o próximo estado
                 }
                 break;
+
             case 1:
-                if (EST_X == 0) {
-                    moverEixoX(1);
-                    if (FDC_MAX_X == 0) EST_X = 1;
+                if (EST_X == 0) {  // Referenciando o eixo X até o fim de curso máximo
+                    moverEixoX(1); // Define direção para a direita
+                    if (FDC_MAX_X == 0) { // Fim de curso máximo de X atingido
+                        EST_X = 1; // Passa para o ajuste fino
+                    }
                 } else if (EST_X == 1) {
-                    toggle.attach(&flip, 0.0045); 
-                    moverEixoX(0);
-                    wait_ms(1000);
-                    EST_X = 2;
-                } else {
-                    toggle.attach(&flip, 0.0015); 
-                    EN_X = 1;
-                    posicao_X = 0;
-                    estado = 2;
+                    // Ajuste fino para X em baixa velocidade
+                    toggle.attach(&flip, 0.0045); // Reduz a velocidade do clock
+                    moverEixoX(0);                // Move lentamente para a esquerda
+                    wait_ms(1000);                 // Aguarda um curto período
+                    toggle.attach(&flip, 0.0015); // Restaura a velocidade normal
+                    EN_X = 1;                     // Desativa o motor X
+                    posicao_X = 0;                // Marca a posição como zero
+                    estado = 2;                   // Passa para o próximo estado
                 }
                 break;
+
             case 2:
-                if (EST_Y == 0) {
-                    moverEixoY(1);
-                    if (FDC_MAX_Y == 0) EST_Y = 1;
+                if (EST_Y == 0) {  // Referenciando o eixo Y até o fim de curso máximo
+                    moverEixoY(1); // Define direção para cima
+                    if (FDC_MAX_Y == 0) { // Fim de curso máximo de Y atingido
+                        EST_Y = 1; // Passa para o ajuste fino
+                    }
                 } else if (EST_Y == 1) {
-                    toggle.attach(&flip, 0.0045); 
-                    moverEixoY(0);
-                    wait_ms(800);
-                    EST_Y = 2;
-                } else {
-                    toggle.attach(&flip, 0.0015); 
-                    EN_Y = 1;
-                    posicao_Y = 0;
-                    estado = 3;
+                    // Ajuste fino para Y em baixa velocidade
+                    toggle.attach(&flip, 0.0045); // Reduz a velocidade do clock
+                    moverEixoY(0);                // Move lentamente para baixo
+                    wait_ms(1000);                 // Aguarda um curto período
+                    toggle.attach(&flip, 0.0015); // Restaura a velocidade normal
+                    EN_Y = 1;                     // Desativa o motor Y
+                    posicao_Y = 0;                // Marca a posição como zero
+                    estado = 3;                   // Referenciamento concluído
                 }
                 break;
         }
@@ -348,10 +439,12 @@ void referenciarMotores() {
     wait_ms(2000);
 }
 
+
 // Funções de salvamento e resgate de posições
 void salvarPosicaoColeta() {
     posicao_coleta_X = posicao_X;
     posicao_coleta_Y = posicao_Y;
+    posicao_coleta_Z = posicao_Z;
     posicao_coleta_salva = true;
 
     lcd.locate(0, 2);
@@ -490,25 +583,18 @@ void moverParaPosicoes() {
 // Funções auxiliares de controle e interface
 void realizarHandshake() {
     lcd.cls();
-    lcd.printf("Iniciando BT...");
-
+    lcd.printf("Aguardando Joystick...");
     while (!handshake_completo) {
-        bt.printf("C");
-        lcd.locate(0, 1);
-        lcd.printf("Tentando handshake...");
         if (bt.readable()) {
             ch = bt.getc();
-            if (ch == 'P') {
-                lcd.cls();
-                lcd.locate(0, 0);
-                lcd.printf("Pipetudo OK");
-                lcd.locate(0, 1);
-                lcd.printf("100%% operante");
+            if (ch == 'P') {  // Recebeu "P" do joystick
                 handshake_completo = true;
-                wait_ms(2000);
+                lcd.cls();
+                lcd.printf("Joystick Conectado!");
+                wait_ms(2000);  // Mostra a mensagem por 2 segundos
+                lcd.cls();
             }
         }
-        wait_ms(200);
     }
 }
 
@@ -661,4 +747,16 @@ void emergencia() {
 
           // Reinicia o microcontrolador completamente
     }
+}
+
+void pararEixoX() {
+    EN_X = 1;
+}
+
+void pararEixoY() {
+    EN_Y = 1;
+}
+
+void pararEixoZ() {
+    EN_Z = 1;
 }
