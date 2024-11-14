@@ -46,6 +46,7 @@ DigitalIn row2(PC_5, PullUp);
 DigitalIn row3(PC_6, PullUp);
 DigitalIn row4(PC_8, PullUp);
 
+DigitalOut pipeta(PA_7);
 
 Timer timerX, timerY, timerZ;  // Temporizadores para cada eixo
 int timeout_ms = 200;  
@@ -71,6 +72,7 @@ void qtdPosicoes(void);
 void resetarPosicoesSalvas(void);
 void reiniciarPrograma(void);
 void emergencia(void);
+void acionarPipeta(void);
 
 // Variáveis globais para controle de posição e estado
 int posicao_X = 0;
@@ -108,7 +110,8 @@ int main() {
     // Configura interrupção para o botão de emergência com debounce
     emergencia();
     BotaoEmergencia.fall(&reiniciarPrograma);
-
+    pipeta = 1;
+    
     timerX.start();
     timerY.start();
     timerZ.start();
@@ -190,6 +193,7 @@ int main() {
                             // Caso deseje tratar comandos desconhecidos
                             break;
             }
+            ch = ' ';
         }
     }
 }
@@ -206,93 +210,112 @@ int main() {
 
         if (referenciamento_concluido) {
             if (bt.readable()) ch = bt.getc();
-            switch (ch) {
-                // Comando para iniciar o referenciamento
-                case 'S':
-                    wait_ms(100);
-                    if (!posicao_coleta_salva) {
-                        salvarPosicaoColeta();
-                        posicao_coleta_salva = true;
-                        ch = ' ';
-                    } else if (!posicoes_completas) {
-                        salvarPosicaoAtual();
-                        contador_posicoes_salvas++;  // Incrementa o contador
+            
+                switch (ch) {
+                    // Comando 'S' para salvar posição de coleta ou próxima posição
+                    case 'S':
+                        wait_ms(100);
+                        if (!posicao_coleta_salva) {
+                            // Salva a posição de coleta na primeira vez
+                            salvarPosicaoColeta();
+                            posicao_coleta_salva = true;  // Marca a posição de coleta como salva
+                            lcd.cls();
+                            lcd.printf("Va para a primeira pos. de liberacao e salve");
 
-                        // Verifica se todas as posições foram salvas
-                        if (contador_posicoes_salvas >= tamanho_array) {
-                            posicoes_completas = true;  // Ativa o sinalizador quando todas as posições são salvas
+                            ch = ' ';
+                        } else if (!posicoes_completas) {
+                            // Salva uma nova posição de liberação
+                            salvarPosicaoAtual();
+                            contador_posicoes_salvas++;  // Incrementa o contador de posições salvas
+                            ch = ' ';
+                            lcd.cls();
+                            lcd.printf("Posicao %d salva", contador_posicoes_salvas);
+
+                            // Verifica se todas as posições foram salvas
+                            if (contador_posicoes_salvas >= tamanho_array) {
+                                posicoes_completas = true;  // Marca que todas as posições foram salvas
+                                ch = ' ';
+                                lcd.cls();
+                                lcd.printf("Todas as posicoes salvas!");
+
+                            }
+                        } else {
+                            // Todas as posições foram salvas; agora o comando 'S' inicia o movimento
+                            lcd.cls();
+                            lcd.printf("Movendo para posicoes");
+                            moverParaPosicoes();
+                            ch = ' ';
                         }
                         ch = ' ';
-                    } else {
-                        // Todas as posições foram salvas; agora o comando 'S' move para as posições
-                        moverParaPosicoes();
+                        wait_ms(300);
+                        break;
+
+                    // Comando para deletar a última posição salva e permitir que outra seja salva no lugar
+                    case 'G':
+                        if (contador_posicoes_salvas > 0) {
+                            contador_posicoes_salvas--;  // Decrementa o contador para "remover" a última posição
+                            posicoes_completas = false;  // Define como incompleto para permitir novo salvamento
+                            ch = ' ';
+                            lcd.cls();
+                            lcd.printf("Posicao %d removida", contador_posicoes_salvas + 1);
+                            wait_ms(1000);
+                        } else {
+                            ch = ' ';
+                            lcd.cls();
+                            lcd.printf("Nenhuma posicao para remover");
+                            wait_ms(1000);
+                        }
+                    
+                        break;
+
+                    // Controle do motor X
+                    case 'D':            // Comando para mover X à direita
+                        moverEixoX(1);
                         ch = ' ';
-                    }
-                    break;
+                        break;
+                    case 'E':            // Comando para mover X à esquerda
+                        moverEixoX(0);
+                        ch = ' ';
+                        break;
+                    case 'N':            // Comando para parar o motor X
+                        pararEixoX();
+                        ch = ' ';
+                        break;
 
-                // Controle do motor X
-                case 'D':            // Comando para mover X à direita
-                    moverEixoX(1);
-                    ch = ' ';
-                    break;
-                case 'E':            // Comando para mover X à esquerda
-                    moverEixoX(0);
-                    ch = ' ';
-                    break;
-                case 'N':            // Comando para parar o motor X
-                    pararEixoX();
-                    ch = ' ';
-                    break;
+                    // Controle do motor Y
+                    case 'C':            // Comando para mover Y para cima
+                        moverEixoY(1);
+                        ch = ' ';
+                        break;
+                    case 'B':            // Comando para mover Y para baixo
+                        moverEixoY(0);
+                        ch = ' ';
+                        break;
+                    case 'M':            // Comando para parar o motor Y
+                        pararEixoY();
+                        ch = ' ';
+                        break;
 
-                // Controle do motor Y
-                case 'C':            // Comando para mover Y para cima
-                    moverEixoY(1);
-                    ch = ' ';
-                    break;
-                case 'B':            // Comando para mover Y para baixo
-                    moverEixoY(0);
-                    ch = ' ';
-                    break;
-                case 'M':            // Comando para parar o motor Y
-                    pararEixoY();
-                    ch = ' ';
-                    break;
+                    // Controle do motor Z
+                    case 'U':            // Comando para mover Z para cima
+                        moverEixoZ(1);
+                        ch = ' ';
+                        break;
+                    case 'Z':            // Comando para mover Z para baixo
+                        moverEixoZ(0);
+                        ch = ' ';
+                        break;
+                    case 'K':            // Comando para parar o motor Z
+                        pararEixoZ();
+                        ch = ' ';
+                        break;
 
-                // Controle do motor Z
-                case 'U':            // Comando para mover Z para cima
-                    moverEixoZ(1);
-                    ch = ' ';
-                    break;
-                case 'Z':            // Comando para mover Z para baixo
-                    moverEixoZ(0);
-                    ch = ' ';
-                    break;
-                case 'K':            // Comando para parar o motor Z
-                    pararEixoZ();
-                    ch = ' ';
-                    break;
-
-                case 'G':
-                    if (num_posicoes_salvas > 0) {
-                        num_posicoes_salvas--;  // Decrementa o contador para "remover" a última posição
-                        posicoes_completas = false;  // Define como incompleto para permitir novo salvamento
-                        lcd.cls();
-                        lcd.printf("Posicao %d removida", num_posicoes_salvas + 1);
-                        wait_ms(1000);
-                    } else {
-                        lcd.cls();
-                        lcd.printf("Nenhuma posicao para remover");
-                        wait_ms(1000);
-                    }
-                    ch = ' ';
-                    break;
-
-                default:
-                    // Caso deseje tratar comandos desconhecidos
-                    break;
+                    default:
+                        // Caso deseje tratar comandos desconhecidos
+                        break;
+                }
             }
         }
-    }
     }
 }
 
@@ -341,12 +364,15 @@ void flip(void) {
     // Verifica o eixo Z
     if (D_Z == 1 && FDC_MAX_Z != 0) {      // Movendo para cima e sem atingir o fim de curso máximo de Z
         CLK_Z = !CLK_Z;
-        if (EN_Z == 0) posicao_Z -= 1;     // Decrementa posição se motor estiver ativo
+        if (EN_Z == 0) posicao_Z += 1;     // Decrementa posição se motor estiver ativo
     } else if (D_Z == 0 && FDC_MIN_Z != 0) { // Movendo para baixo e sem atingir o fim de curso mínimo de Z
         CLK_Z = !CLK_Z;
-        if (EN_Z == 0) posicao_Z += 1;     // Incrementa posição se motor estiver ativo
+        if (EN_Z == 0) posicao_Z -= 1;     // Incrementa posição se motor estiver ativo
     }
+
+    // Exibe as posições dos motores no terminal
 }
+
 
 void referenciarMotores() {
     lcd.cls();
@@ -450,14 +476,10 @@ void salvarPosicaoColeta() {
     lcd.locate(0, 2);
     lcd.printf("Coleta salva:");
     lcd.locate(0, 3);
-    lcd.printf("X=%d, Y=%d", posicao_coleta_X, posicao_coleta_Y);
+    lcd.printf("X=%d, Y=%d, Z=%d", posicao_coleta_X, posicao_coleta_Y, posicao_coleta_Z);
     
     wait_ms(2000);
     lcd.cls();
-
-    // Instrução para a primeira posição de liberação
-    lcd.locate(0, 2);
-    lcd.printf("Va para posicao 1 deliberacao e salve");
 }
 
 void salvarPosicaoAtual() {
@@ -468,13 +490,21 @@ void salvarPosicaoAtual() {
         posicoes_Z[num_posicoes_salvas] = posicao_Z;
 
         // Confirmação rápida de posição salva nas linhas 3 e 4
+        lcd.cls();
         lcd.locate(0, 0); // Linha 3
         lcd.printf("Pos %d salva!", num_posicoes_salvas + 1);
+        lcd.locate(0,1);
+        lcd.printf("X:%d", posicao_X);
+        lcd.locate(0,2);
+        lcd.printf("Y:%d", posicao_Y);
+        lcd.locate(0,3);
+        lcd.printf("Y:%d", posicao_Y);
 
         num_posicoes_salvas++;
 
         // Atualiza as instruções nas linhas 1 e 2 para a próxima posição ou para iniciar pipetagem
         if (num_posicoes_salvas < tamanho_array) {
+            lcd.cls();
             lcd.locate(0, 2); // Linha 1
             lcd.printf("Va para posicao %d de", num_posicoes_salvas+1);
             lcd.locate(0, 3);
@@ -490,18 +520,33 @@ void salvarPosicaoAtual() {
     } else {
         lcd.cls();
         lcd.printf("Limite de %d posicoes alcancado.", tamanho_array);
+        lcd.cls();
+        lcd.printf("Iniciar pipetagem?");
         wait_ms(1000);
     }
 }
 
-// Funções de movimento para posições salvas
-void moverParaPosicao(int alvo_X, int alvo_Y) {
+void moverEixoZParaZero() {
+    // Move o eixo Z para a posição 0
+    while (posicao_Z > 0) moverEixoZ(0);
+    EN_Z = 1;
+    wait_ms(200);
+}
+
+void moverParaPosicao(int alvo_X, int alvo_Y, int alvo_Z) {
+    // Move o eixo X e Y para as coordenadas alvo
     while (abs(posicao_X - alvo_X) > 0) moverEixoX(posicao_X < alvo_X ? 1 : 0);
     EN_X = 1;
     wait_ms(200);
 
     while (abs(posicao_Y - alvo_Y) > 0) moverEixoY(posicao_Y < alvo_Y ? 0 : 1);
     EN_Y = 1;
+    wait_ms(200);
+
+    // Finalmente, desce o eixo Z para a posição alvo de coleta ou liberação
+    while (posicao_Z < alvo_Z) moverEixoZ(1);
+    EN_Z = 1;
+    wait_ms(200);
 }
 
 void moverParaPosicoes() {
@@ -516,39 +561,43 @@ void moverParaPosicoes() {
     }
 
     for (int i = 0; i < num_posicoes_salvas; i++) {
+        // Move para a posição de coleta
         lcd.locate(0, 1);
         lcd.printf("Indo para pos coleta");
-        moverParaPosicao(posicao_coleta_X, posicao_coleta_Y);
 
-        lcd.locate(0, 3);
-        lcd.printf("Coletando     ");
-        for (int j = 0; j < 3; j++) {
-            lcd.locate(10 + j, 3);
-            lcd.printf(".");
-            wait_ms(330);
-        }
-        lcd.locate(0, 2);
-        lcd.printf("                    ");
+        // Sobe o eixo Z para Z = 0 antes da coleta
+        moverEixoZParaZero();
+
+        // Em seguida, move para X e Y da posição de coleta e desce Z
+        moverParaPosicao(posicao_coleta_X, posicao_coleta_Y, posicao_coleta_Z);
+
+        // Aciona a pipeta para coletar o líquido
+        acionarPipeta();
 
         lcd.locate(0, 1);
         lcd.printf("                    ");
+        
+        // Move para a posição de liberação i
         lcd.printf("Indo para pos %d", i + 1);
-        moverParaPosicao(posicoes_X[i], posicoes_Y[i]);
 
-        lcd.locate(0, 3);
-        lcd.printf("Liberando     ");
-        for (int j = 0; j < 3; j++) {
-            lcd.locate(10 + j, 3);
-            lcd.printf(".");
-            wait_ms(1666);
-        }
+        // Sobe o eixo Z para Z = 0 antes da liberação
+        moverEixoZParaZero();
+
+        // Em seguida, move para X e Y da posição de liberação e desce Z
+        moverParaPosicao(posicoes_X[i], posicoes_Y[i], posicoes_Z[i]);
+
+        // Aciona a pipeta para liberar o líquido
+        acionarPipeta();
+        
         lcd.locate(0, 2);
         lcd.printf("                    ");
     }
 
+    // Após liberar todas as posições, retorna para a posição de origem com Z = 0
     lcd.locate(0, 1);
     lcd.printf("Retornando p origem");
-    moverParaPosicao(0, 0);
+    moverEixoZParaZero();
+    moverParaPosicao(0, 0, 0); // Volta para a origem em X, Y e Z
 
     lcd.locate(0, 2);
     lcd.printf("Pipetagem completa!");
@@ -565,15 +614,13 @@ void moverParaPosicoes() {
         if (bt.readable()) {
             char resposta = bt.getc();
             if (resposta == 'S' || resposta == 's') {
-                // Reinicia o ciclo de pipetagem voltando para o segundo while do main
                 aguardandoResposta = false;
             } else if (resposta == 'N' || resposta == 'n') {
-                // Redefine as variáveis e sai para o ciclo principal
                 aguardandoResposta = false;
                 resetarPosicoesSalvas();  // Limpa as posições salvas
                 tamanho_array = 0;         // Permite redefinir a quantidade de posições
                 posicao_coleta_salva = false; // Reseta a posição de coleta salva
-                return; // Sai da função e volta para o segundo while no main
+                return;
             }
         }
         wait_ms(100);
@@ -759,4 +806,11 @@ void pararEixoY() {
 
 void pararEixoZ() {
     EN_Z = 1;
+}
+
+void acionarPipeta() {
+    pipeta = 0;           // Ativa a pipeta
+    wait(0.6);            // Aguarda 0,6 segundos
+    pipeta = 1;           // Desativa a pipeta
+    wait(1.5);            // Aguarda 1,5 segundos antes da próxima ação
 }

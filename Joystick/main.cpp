@@ -82,10 +82,13 @@ int main() {
 
 void trocaEixo() {
     controle_eixo_Z = !controle_eixo_Z;
+    bt.printf("Y");
 }
 
 void enviarComandoSim() {
+    wait_ms(200);
     bt.printf("S");  
+    
 }
 
 void enviarComandoP() {
