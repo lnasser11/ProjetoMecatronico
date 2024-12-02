@@ -11,6 +11,9 @@ TextLCD_I2C lcd(&i2c_lcd, 0x7E, TextLCD::LCD20x4); // Endereço 0x7E e display 2
 
 Ticker toggle;
 Ticker posicaoTicker;
+Ticker ledTicker;
+Ticker redLedTicker;
+Ticker BuzzerTicker;
 
 // Definição dos pinos dos motores e dos sensores de fim de curso
 DigitalOut CLK_Y(PB_4); 
@@ -35,6 +38,11 @@ DigitalIn FDC_MIN_X(PB_2);  // Ajustado: Fim de curso mínimo para X
 DigitalIn FDC_MAX_Z(PB_14);
 DigitalIn FDC_MIN_Z(PB_13);
 
+// Adicione essas linhas no início, junto com as outras declarações de pinos.
+DigitalOut led_verde(PC_12);
+DigitalOut led_vermelho(PA_15);
+DigitalOut buzzer(PC_11);
+
 InterruptIn BotaoEmergencia(PC_10);
 
 // Definição dos pinos do teclado matricial
@@ -45,6 +53,7 @@ DigitalIn row1(PC_4, PullUp);
 DigitalIn row2(PC_5, PullUp);
 DigitalIn row3(PC_6, PullUp);
 DigitalIn row4(PC_8, PullUp);
+
 
 DigitalOut pipeta(PA_7);
 
@@ -73,6 +82,9 @@ void resetarPosicoesSalvas(void);
 void reiniciarPrograma(void);
 void emergencia(void);
 void acionarPipeta(void);
+void piscarLedVerde(void);
+void alternarLedVermelho(void);
+void alternarBuzzer(void);
 
 // Variáveis globais para controle de posição e estado
 int posicao_X = 0;
@@ -104,6 +116,7 @@ bool posicoes_completas = false;   // Sinalizador para indicar se todas as posi�
 
 // Função principal
 int main() {
+
     lcd.setBacklight(TextLCD::LightOn);
     lcd.setCursor(TextLCD::CurOff_BlkOff);
 
@@ -111,7 +124,8 @@ int main() {
     emergencia();
     BotaoEmergencia.fall(&reiniciarPrograma);
     pipeta = 1;
-    
+    led_verde = 1;
+
     timerX.start();
     timerY.start();
     timerZ.start();
@@ -220,7 +234,7 @@ int main() {
                             salvarPosicaoColeta();
                             posicao_coleta_salva = true;  // Marca a posição de coleta como salva
                             lcd.cls();
-                            lcd.printf("Va para a primeira pos. de liberacao e salve");
+                            lcd.printf("Va para a pos. 1 de liberacao e salve");
 
                             ch = ' ';
                         } else if (!posicoes_completas) {
@@ -230,13 +244,19 @@ int main() {
                             ch = ' ';
                             lcd.cls();
                             lcd.printf("Posicao %d salva", contador_posicoes_salvas);
+                            lcd.locate(0,1);
+                            lcd.printf("Va para a prox.");
 
                             // Verifica se todas as posições foram salvas
                             if (contador_posicoes_salvas >= tamanho_array) {
                                 posicoes_completas = true;  // Marca que todas as posições foram salvas
                                 ch = ' ';
                                 lcd.cls();
-                                lcd.printf("Todas as posicoes salvas!");
+                                lcd.printf("Todas as posicoes");
+                                lcd.locate(0,1);
+                                lcd.printf("salvas!");
+                                lcd.locate(0,2);
+                                lcd.printf("Iniciar pipetagem?");
 
                             }
                         } else {
@@ -251,22 +271,31 @@ int main() {
                         break;
 
                     // Comando para deletar a última posição salva e permitir que outra seja salva no lugar
-                    case 'G':
+                    case 'L':
                         if (contador_posicoes_salvas > 0) {
+                            // Remove a última posição de liberação salva
                             contador_posicoes_salvas--;  // Decrementa o contador para "remover" a última posição
                             posicoes_completas = false;  // Define como incompleto para permitir novo salvamento
-                            ch = ' ';
                             lcd.cls();
                             lcd.printf("Posicao %d removida", contador_posicoes_salvas + 1);
                             wait_ms(1000);
+                        } else if (posicao_coleta_salva) {
+                            // Se não há posições de liberação, permite apagar a posição de coleta
+                            posicao_coleta_salva = false;  // Marca como não salva
+                            posicao_coleta_X = 0;
+                            posicao_coleta_Y = 0;
+                            posicao_coleta_Z = 0;
+                            lcd.cls();
+                            lcd.printf("Pos de coleta apagada");
+                            wait_ms(1000);
                         } else {
-                            ch = ' ';
                             lcd.cls();
                             lcd.printf("Nenhuma posicao para remover");
                             wait_ms(1000);
                         }
-                    
+                        ch = ' ';
                         break;
+
 
                     // Controle do motor X
                     case 'D':            // Comando para mover X à direita
@@ -376,85 +405,101 @@ void flip(void) {
 
 void referenciarMotores() {
     lcd.cls();
-    lcd.printf("Aguardando 'S' p/ Referenc.");
+    lcd.printf("Referenciando...");
 
-    // Inicia o processo de referenciamento após receber "S"
+    // Configura o Ticker para piscar o LED verde
+    ledTicker.attach(&piscarLedVerde, 0.5); // LED pisca a cada 500ms
+
+    // Inicia o processo de referenciamento
     int estado = 0;
     int EST_Y = 0;
     int EST_X = 0;
     int EST_Z = 0;
-    int animacao_pontos = 0;
 
-    lcd.cls();
-    lcd.printf("Referenciando");
+    lcd.locate(0, 1);
+    lcd.printf("X: ...");
+    lcd.locate(0, 2);
+    lcd.printf("Y: ...");
+    lcd.locate(0, 3);
+    lcd.printf("Z: ...");
 
     while (estado != 3) {
-        lcd.locate(14, 0);
-        switch (animacao_pontos % 4) {
-            case 0: lcd.printf("   "); break;
-            case 1: lcd.printf(".  "); break;
-            case 2: lcd.printf(".. "); break;
-            case 3: lcd.printf("..."); break;
-        }
-        animacao_pontos++;
-        wait_ms(300);
-
         switch (estado) {
-            case 0:
-                if (EST_Z == 0) {  // Referenciando o eixo Z até o fim de curso mínimo
-                    moverEixoZ(0);     // Define direção para descer
+            case 0: // Referenciando o eixo Z
+                if (EST_Z == 0) {
+                    moverEixoZ(0); // Define direção para descer
                     if (FDC_MIN_Z == 0) { // Fim de curso mínimo de Z atingido
                         EST_Z = 1; // Passa para o ajuste fino
                     }
+                    lcd.locate(0, 3);
+                    lcd.printf("Z: ...");
                 } else if (EST_Z == 1) {
-                    // Ajuste fino para Z em baixa velocidade
                     toggle.attach(&flip, 0.0045); // Reduz a velocidade do clock
                     moverEixoZ(1);                // Move lentamente para cima
-                    wait_ms(1000);                 // Aguarda um curto período
+                    wait_ms(1000);                // Aguarda um curto período
                     toggle.attach(&flip, 0.0015); // Restaura a velocidade normal
                     EN_Z = 1;                     // Desativa o motor Z
                     posicao_Z = 0;                // Marca a posição como zero
                     estado = 1;                   // Passa para o próximo estado
+                    lcd.locate(0, 3);
+                    lcd.printf("Z: Referenciado!");
                 }
                 break;
 
-            case 1:
-                if (EST_X == 0) {  // Referenciando o eixo X até o fim de curso máximo
+            case 1: // Referenciando o eixo X
+                if (EST_X == 0) {
                     moverEixoX(1); // Define direção para a direita
                     if (FDC_MAX_X == 0) { // Fim de curso máximo de X atingido
                         EST_X = 1; // Passa para o ajuste fino
                     }
+                    lcd.locate(0, 1);
+                    lcd.printf("X: ...");
                 } else if (EST_X == 1) {
-                    // Ajuste fino para X em baixa velocidade
                     toggle.attach(&flip, 0.0045); // Reduz a velocidade do clock
                     moverEixoX(0);                // Move lentamente para a esquerda
-                    wait_ms(1000);                 // Aguarda um curto período
+                    wait_ms(1000);                // Aguarda um curto período
                     toggle.attach(&flip, 0.0015); // Restaura a velocidade normal
                     EN_X = 1;                     // Desativa o motor X
                     posicao_X = 0;                // Marca a posição como zero
                     estado = 2;                   // Passa para o próximo estado
+                    lcd.locate(0, 1);
+                    lcd.printf("X: Referenciado!");
                 }
                 break;
 
-            case 2:
-                if (EST_Y == 0) {  // Referenciando o eixo Y até o fim de curso máximo
+            case 2: // Referenciando o eixo Y
+                if (EST_Y == 0) {
                     moverEixoY(1); // Define direção para cima
                     if (FDC_MAX_Y == 0) { // Fim de curso máximo de Y atingido
                         EST_Y = 1; // Passa para o ajuste fino
                     }
+                    lcd.locate(0, 2);
+                    lcd.printf("Y: ...");
                 } else if (EST_Y == 1) {
-                    // Ajuste fino para Y em baixa velocidade
                     toggle.attach(&flip, 0.0045); // Reduz a velocidade do clock
                     moverEixoY(0);                // Move lentamente para baixo
-                    wait_ms(1000);                 // Aguarda um curto período
+                    wait_ms(1000);                // Aguarda um curto período
                     toggle.attach(&flip, 0.0015); // Restaura a velocidade normal
                     EN_Y = 1;                     // Desativa o motor Y
                     posicao_Y = 0;                // Marca a posição como zero
                     estado = 3;                   // Referenciamento concluído
+                    lcd.locate(0, 2);
+                    lcd.printf("Y: Referenciado!");
                 }
                 break;
         }
+
+        wait_ms(100); // Aguarda para evitar sobrecarga no loop
     }
+
+    // Para o Ticker e o LED verde
+    ledTicker.detach();
+    led_verde = 1;
+
+    // Emite som no buzzer para indicar conclusão
+    buzzer = 1;
+    wait_ms(500);
+    buzzer = 0;
 
     lcd.cls();
     lcd.locate(0, 0);
@@ -466,6 +511,9 @@ void referenciarMotores() {
 }
 
 
+
+
+
 // Funções de salvamento e resgate de posições
 void salvarPosicaoColeta() {
     posicao_coleta_X = posicao_X;
@@ -473,10 +521,15 @@ void salvarPosicaoColeta() {
     posicao_coleta_Z = posicao_Z;
     posicao_coleta_salva = true;
 
-    lcd.locate(0, 2);
+    lcd.cls();
+    lcd.locate(0, 0);
     lcd.printf("Coleta salva:");
-    lcd.locate(0, 3);
-    lcd.printf("X=%d, Y=%d, Z=%d", posicao_coleta_X, posicao_coleta_Y, posicao_coleta_Z);
+    lcd.locate(0, 1);
+    lcd.printf("X=%d", posicao_coleta_X);
+    lcd.locate(0,2);
+    lcd.printf("Y=%d", posicao_coleta_Y);
+    lcd.locate(0,3);
+    lcd.printf("Z=%d", posicao_coleta_Z);
     
     wait_ms(2000);
     lcd.cls();
@@ -498,7 +551,7 @@ void salvarPosicaoAtual() {
         lcd.locate(0,2);
         lcd.printf("Y:%d", posicao_Y);
         lcd.locate(0,3);
-        lcd.printf("Y:%d", posicao_Y);
+        lcd.printf("Z:%d", posicao_Z);
 
         num_posicoes_salvas++;
 
@@ -521,7 +574,6 @@ void salvarPosicaoAtual() {
         lcd.cls();
         lcd.printf("Limite de %d posicoes alcancado.", tamanho_array);
         lcd.cls();
-        lcd.printf("Iniciar pipetagem?");
         wait_ms(1000);
     }
 }
@@ -550,92 +602,223 @@ void moverParaPosicao(int alvo_X, int alvo_Y, int alvo_Z) {
 }
 
 void moverParaPosicoes() {
-    lcd.cls();
-    lcd.printf("Simulando Pipetagem");
-
-    if (!posicao_coleta_salva) {
-        lcd.locate(0, 1);
-        lcd.printf("Pos de coleta n salva");
-        wait_ms(1000);
-        return;
-    }
-
-    for (int i = 0; i < num_posicoes_salvas; i++) {
-        // Move para a posição de coleta
-        lcd.locate(0, 1);
-        lcd.printf("Indo para pos coleta");
-
-        // Sobe o eixo Z para Z = 0 antes da coleta
-        moverEixoZParaZero();
-
-        // Em seguida, move para X e Y da posição de coleta e desce Z
-        moverParaPosicao(posicao_coleta_X, posicao_coleta_Y, posicao_coleta_Z);
-
-        // Aciona a pipeta para coletar o líquido
-        acionarPipeta();
-
-        lcd.locate(0, 1);
-        lcd.printf("                    ");
-        
-        // Move para a posição de liberação i
-        lcd.printf("Indo para pos %d", i + 1);
-
-        // Sobe o eixo Z para Z = 0 antes da liberação
-        moverEixoZParaZero();
-
-        // Em seguida, move para X e Y da posição de liberação e desce Z
-        moverParaPosicao(posicoes_X[i], posicoes_Y[i], posicoes_Z[i]);
-
-        // Aciona a pipeta para liberar o líquido
-        acionarPipeta();
-        
-        lcd.locate(0, 2);
-        lcd.printf("                    ");
-    }
-
-    // Após liberar todas as posições, retorna para a posição de origem com Z = 0
+    lcd.cls(); // Limpa a tela antes de exibir a mensagem inicial
+    lcd.printf("Defina o volume:");
     lcd.locate(0, 1);
-    lcd.printf("Retornando p origem");
-    moverEixoZParaZero();
-    moverParaPosicao(0, 0, 0); // Volta para a origem em X, Y e Z
+    lcd.printf("1 a 5 ml");
 
-    lcd.locate(0, 2);
+    int ml_selecionado = 0;
+    bool confirmacao = false;
+
+    // Perguntar o volume de pipetagem
+    while (!confirmacao) {
+
+         const char keys[4][3] = {
+        {'1', '2', '3'},
+        {'4', '5', '6'},
+        {'7', '8', '9'},
+        {'*', '0', '#'}
+    };
+    
+        for (int col = 0; col < 3; col++) {
+            col1 = (col == 0) ? 0 : 1;
+            col2 = (col == 1) ? 0 : 1;
+            col3 = (col == 2) ? 0 : 1;
+
+            if (row1 == 0 || row2 == 0 || row3 == 0 || row4 == 0) {
+                char tecla = ' ';
+                if (row1 == 0) tecla = keys[0][col];
+                if (row2 == 0) tecla = keys[1][col];
+                if (row3 == 0) tecla = keys[2][col];
+                if (row4 == 0) tecla = keys[3][col];
+
+                if (tecla >= '1' && tecla <= '5') {  // Aceita apenas 1 a 5 ml
+                    ml_selecionado = tecla - '0';
+                    lcd.locate(0, 2);
+                    lcd.printf("Selecionado: %d ml", ml_selecionado);
+                } else if (tecla == '#') {  // Confirmação do valor
+                    confirmacao = true;
+                    lcd.cls();
+                    lcd.printf("Volume definido:");
+                    lcd.locate(0, 1);
+                    lcd.printf("%d ml", ml_selecionado);
+                    wait_ms(2000);
+                }
+
+                wait_ms(200);
+            }
+        }
+
+        col1 = 1;
+        col2 = 1;
+        col3 = 1;
+
+        wait_ms(100);
+    }
+
+    // Inicia o Ticker para piscar o LED verde
+    ledTicker.attach(&piscarLedVerde, 0.5); // LED pisca a cada 500ms
+
+    // Ciclos baseados no volume selecionado
+    for (int ciclo = 0; ciclo < ml_selecionado; ciclo++) {
+        for (int i = 0; i < num_posicoes_salvas; i++) {
+            lcd.cls();
+            lcd.locate(0, 0);
+            lcd.printf("Pipetando...");
+            lcd.locate(0, 1);
+            lcd.printf("Ciclo %d de %d", ciclo + 1, ml_selecionado); // Exibe o ciclo correto
+
+            // Subindo para Z=0
+            lcd.locate(0, 2);
+            lcd.printf("Subindo para Z=0");
+            moverEixoZParaZero();
+
+            // Indo para posição de coleta
+            lcd.cls();
+            lcd.locate(0, 2);
+            lcd.printf("Indo para coleta");
+            moverParaPosicao(posicao_coleta_X, posicao_coleta_Y, 0);
+
+            // Descendo para posição de coleta
+            lcd.cls();
+            lcd.locate(0, 2);
+            lcd.printf("Descendo para coleta");
+            while (posicao_Z < posicao_coleta_Z) moverEixoZ(1);
+            EN_Z = 1;
+            wait_ms(500);
+
+            // Coletando
+            lcd.cls();
+            lcd.locate(0, 2);
+            lcd.printf("Coletando...");
+            acionarPipeta();
+
+            // Subindo para Z=0
+            lcd.cls();
+            lcd.locate(0, 2);
+            lcd.printf("Subindo para Z=0");
+            moverEixoZParaZero();
+
+            // Indo para posição de liberação
+            lcd.cls();
+            lcd.locate(0, 2);
+            lcd.printf("Indo para lib pos %d", i + 1);
+            moverParaPosicao(posicoes_X[i], posicoes_Y[i], 0);
+
+            // Descendo para posição de liberação
+            lcd.cls();
+            lcd.locate(0, 2);
+            lcd.printf("Descendo p/ posicao");
+            lcd.locate(0, 3);
+            lcd.printf("de lib. %d", i + 1);
+            while (posicao_Z < posicoes_Z[i]) moverEixoZ(1);
+            EN_Z = 1;
+            wait_ms(500);
+
+            // Liberando
+            lcd.cls();
+            lcd.locate(0, 2);
+            lcd.printf("Liberando...");
+            acionarPipeta();
+
+            // Subindo para Z=0
+            lcd.cls();
+            lcd.locate(0, 2);
+            lcd.printf("Subindo para Z=0");
+            moverEixoZParaZero();
+        }
+    }
+
+    // Retornando à origem
+    lcd.cls();
+    lcd.printf("Retornando p/ origem");
+    moverEixoZParaZero();
+    moverParaPosicao(0, 0, 0);
+
+    // Para o Ticker e o LED verde
+    ledTicker.detach();
+    led_verde = 1;
+
+    // Emite som no buzzer para indicar conclusão
+    buzzer = 1;
+    wait_ms(200);
+    buzzer = 0;
+    wait_ms(200);
+    buzzer = 1;
+    wait_ms(200);
+    buzzer = 0;
+    wait_ms(200);
+    buzzer = 1;
+    wait_ms(200);
+    buzzer = 0;
+
+    lcd.cls(); // Mensagem final
     lcd.printf("Pipetagem completa!");
     wait_ms(2000);
 
-    // Pergunta ao usuário se deseja fazer outra pipetagem
+    // Pergunta se o usuário deseja repetir
     lcd.cls();
-    lcd.printf("Deseja outra");
+    lcd.printf("Deseja pipetar");
     lcd.locate(0, 1);
-    lcd.printf("pipetagem? (S/N)");
+    lcd.printf("nas mesmas pos.?");
+    lcd.locate(0, 2);
+    lcd.printf("Azul p/ sim,");
+    lcd.locate(0, 3);
+    lcd.printf("Vermelho p novas pos");
 
     bool aguardandoResposta = true;
+
     while (aguardandoResposta) {
         if (bt.readable()) {
             char resposta = bt.getc();
-            if (resposta == 'S' || resposta == 's') {
+            if (resposta == 'S') {
+                // Inicia o processo de pipetagem novamente
                 aguardandoResposta = false;
-            } else if (resposta == 'N' || resposta == 'n') {
+                moverParaPosicoes(); // Recomeça a pipetagem
+            } else if (resposta == 'L') {
+                // Reinicia o processo desde o início
                 aguardandoResposta = false;
-                resetarPosicoesSalvas();  // Limpa as posições salvas
-                tamanho_array = 0;         // Permite redefinir a quantidade de posições
-                posicao_coleta_salva = false; // Reseta a posição de coleta salva
-                return;
+                reiniciarPrograma();
+                return; // Sai da função e volta ao início do programa
             }
         }
         wait_ms(100);
     }
 }
 
+
+
+
 // Funções auxiliares de controle e interface
 void realizarHandshake() {
     lcd.cls();
-    lcd.printf("Aguardando Joystick...");
+    lcd.locate(0, 0);
+    lcd.printf("Aguardando");
+    lcd.locate(0, 1);
+    lcd.printf("Joystick");
+
+    redLedTicker.attach(&alternarLedVermelho, 1.0);
+
+    int animacao_pontos = 0; // Contador para a animação dos pontos
+
     while (!handshake_completo) {
+        // Animação dos três pontos
+        lcd.locate(9, 1); // Posição após "Joystick"
+        switch (animacao_pontos % 4) {
+            case 0: lcd.printf("   "); break; // Sem pontos
+            case 1: lcd.printf(".  "); break; // Um ponto
+            case 2: lcd.printf(".. "); break; // Dois pontos
+            case 3: lcd.printf("..."); break; // Três pontos
+        }
+        animacao_pontos++;
+        wait_ms(300); // Intervalo da animação
+
+        // Verifica se o joystick respondeu
         if (bt.readable()) {
             ch = bt.getc();
             if (ch == 'P') {  // Recebeu "P" do joystick
                 handshake_completo = true;
+                redLedTicker.detach();
                 lcd.cls();
                 lcd.printf("Joystick Conectado!");
                 wait_ms(2000);  // Mostra a mensagem por 2 segundos
@@ -658,6 +841,10 @@ void qtdPosicoes() {
     lcd.cls();
     lcd.locate(0, 0);
     lcd.printf("Salvar quantas pos?");
+    lcd.locate(0,2);
+    lcd.printf("# p/ confirmar");
+    lcd.locate(0,3);
+    lcd.printf("* p/ apagar");
     int numero_digitado = 0;
     bool confirmacao = false;
 
@@ -716,11 +903,23 @@ void qtdPosicoes() {
 void resetarPosicoesSalvas() {
     delete[] posicoes_X;
     delete[] posicoes_Y;
+    delete[] posicoes_Z;
 
-    posicoes_X = new int[tamanho_array];
-    posicoes_Y = new int[tamanho_array];
+    posicoes_X = NULL;
+    posicoes_Y = NULL;
+    posicoes_Z = NULL;
+    
     num_posicoes_salvas = 0;
+    tamanho_array = 0;
+    posicao_coleta_salva = false;
+    
+    // Marcar o referenciamento como não concluído para reiniciar do início do main
+    referenciamento_concluido = false;
+    
+    // Reseta também o estado de emergência
+    emergencia_ativada = false;
 
+    // Limpa o display para a nova inicialização
     lcd.cls();
 }
 
@@ -729,8 +928,12 @@ void reiniciarPrograma() {
     // Resetar variáveis e liberar memória
     delete[] posicoes_X;
     delete[] posicoes_Y;
+    delete[] posicoes_Z;
+
     posicoes_X = NULL;
     posicoes_Y = NULL;
+    posicoes_Z = NULL;
+
     num_posicoes_salvas = 0;
     tamanho_array = 0;
     posicao_coleta_salva = false;
@@ -747,9 +950,14 @@ void reiniciarPrograma() {
     // Nota: Como estamos no `while(true)` do main, ao terminar essa função, ele vai começar o ciclo novamente.
 }
 
+
 void emergencia() {
     if (BotaoEmergencia == 0) {
         emergencia_ativada = true;
+
+        // Inicia os Tickers para o LED vermelho e o buzzer
+        redLedTicker.attach(&alternarLedVermelho, 0.5);  // Pisca a cada 500ms
+        BuzzerTicker.attach(&alternarBuzzer, 0.5);    // Buzzer sincronizado com o LED
 
         lcd.cls();
         lcd.printf("EMERGENCIA ATIVADA");
@@ -757,6 +965,7 @@ void emergencia() {
         // Desativa os motores imediatamente
         EN_X = 1; // Desativa o motor X
         EN_Y = 1; // Desativa o motor Y
+        EN_Z = 1; // Desativa o motor Z
 
         // Aguarda o botão ser solto após ativação de emergência
         while (BotaoEmergencia == 0) {
@@ -785,16 +994,23 @@ void emergencia() {
             wait_ms(100);
         }
 
+        // Para os Tickers de emergência
+        redLedTicker.detach();
+        BuzzerTicker.detach();
+
+        // Reseta o estado do LED vermelho e do buzzer
+        led_vermelho = 0;
+        buzzer = 0;
+
         referenciamento_concluido = false;
         emergencia_ativada = false;
 
         lcd.cls();
         lcd.printf("Reiniciando...");
         wait_ms(2000);
-
-          // Reinicia o microcontrolador completamente
     }
 }
+
 
 void pararEixoX() {
     EN_X = 1;
@@ -810,7 +1026,19 @@ void pararEixoZ() {
 
 void acionarPipeta() {
     pipeta = 0;           // Ativa a pipeta
-    wait(0.6);            // Aguarda 0,6 segundos
+    wait_ms(2000);            // Aguarda 0,6 segundos
     pipeta = 1;           // Desativa a pipeta
-    wait(1.5);            // Aguarda 1,5 segundos antes da próxima ação
+    wait_ms(2000);            // Aguarda 1,5 segundos antes da próxima ação
+}
+
+void piscarLedVerde() {
+    led_verde = !led_verde;  // Alterna o estado do LED verde
+}
+
+void alternarLedVermelho() {
+    led_vermelho = !led_vermelho; // Alterna o estado do LED vermelho
+}
+
+void alternarBuzzer() {
+    buzzer = !buzzer; // Alterna o estado do buzzer
 }
